@@ -1,0 +1,565 @@
+---
+title: "Survey on career development for research professional services staff"
+author: "Emma Francis"
+output: github_document
+always_allow_html: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(error = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Overview
+
+**Data:** `Survey_data_career_development_23nov.xlsx` (N = 64; CTO = 32, DTE = 10, Impact = 22)
+
+1. Set up: packages, data, output folder
+2. Examine data: raw counts, including free text
+3. Derive variables: cohort labels, reverse coding, grouped categories for Table 1
+4. Descriptive statistics
+   - 4.1 Table 1: sociodemographic and career-related characteristics
+   - 4.2 Career characteristics by cohort (for the Results text)
+   - 4.3 Table 3 and Supplementary Table S3: career development activities
+   - 4.4 COM-B statements: overall and by cohort
+   - 4.5 Intervention suggestions: Supplementary Table S2 (n (%) helpful, M (SD))
+5. Plots
+   - 5.1 Figures 4–6 (COM-B, combined) and Supplementary Figures S1–S9 (by cohort)
+   - 5.2 Figure 7 (intervention ratings, combined) and Supplementary Figures S10–S12 (by cohort)
+
+All figures are saved to the folder set in `out_dir`.
+
+# 1. Set up
+
+```{r packages}
+# install.packages(c("readxl", "dplyr", "tidyr", "forcats", "stringr", "ggplot2", "psych"))
+library(readxl)
+library(dplyr)    # load dplyr AFTER any other package; do not load plyr (it masks dplyr functions)
+library(tidyr)
+library(forcats)
+library(stringr)
+library(ggplot2)
+
+# Read in data (use the path for the computer you are on - not included here for privacy)
+data <- read_excel("enter_pwd_here.xlsx", sheet = 1)
+
+# Folder where all figures are saved
+out_dir <- path.expand("~/enter_pwd_here/career_dev_figures")
+dir.create(out_dir, showWarnings = FALSE)
+
+# Helper functions -----------------------------------------------------------
+round_up <- function(x) floor(x + 0.5)            # rounds .5 up (R's round() rounds 62.5 to 62)
+
+# n (%) table with whole-number percentages; denominator = non-missing responses
+freq_table <- function(x, levels = NULL) {
+  x <- if (is.null(levels)) factor(x) else factor(x, levels = levels)
+  tab <- table(x)
+  data.frame(category = names(tab), n = as.integer(tab),
+             pct = round_up(100 * as.integer(tab) / sum(tab)),
+             n_pct = paste0(as.integer(tab), " (", round_up(100 * as.integer(tab) / sum(tab)), ")"))
+}
+
+# Same, split by cohort (% within each cohort)
+freq_by_cohort <- function(df, var, levels = NULL) {
+  df %>%
+    filter(!is.na(.data[[var]])) %>%
+    mutate(value = if (is.null(levels)) factor(.data[[var]]) else factor(.data[[var]], levels = levels)) %>%
+    count(cohort, value, .drop = FALSE) %>%
+    group_by(cohort) %>%
+    mutate(n_pct = paste0(n, " (", round_up(100 * n / sum(n)), ")")) %>%
+    select(-n) %>%
+    pivot_wider(names_from = cohort, values_from = n_pct)
+}
+```
+
+# 2. Examine data
+
+Raw counts, to check the data and see free-text responses.
+
+```{r examine}
+dim(data)
+
+# Sociodemographic
+table(data$cohort, useNA = "always")
+table(data$gender, useNA = "always")
+table(data$age, useNA = "always")
+table(data$sexual_orient, useNA = "always")
+table(data$sexual_orient_describe)
+table(data$ethnicity, useNA = "always")
+table(data$ethnicity_white_describe)       # self-described White backgrounds
+table(data$ethnicity_asian_describe)
+table(data$ethnicity_other_describe)
+table(data$disability, useNA = "always")
+table(data$ses, useNA = "always")
+
+# Career-related
+table(data$current_grade, useNA = "always")
+table(data$length_current, useNA = "always")
+table(data$last_apply, useNA = "always")
+table(data$last_apply_specifiy, useNA = "always")
+table(data$last_apply_specifiy_other)
+table(data$ucl_faculty, useNA = "always")
+table(data$psych_know_frame_other)          # best-aligned career framework (free text)
+
+# Activities and intervention free text
+table(data$activities_other)
+table(data$int_other)
+```
+
+# 3. Derive variables
+
+## 3.1 Cohort labels
+
+```{r cohort}
+# Shorten cohort labels (works whether the data hold the long or short labels)
+data <- data %>%
+  mutate(cohort = case_when(
+    str_detect(cohort, regex("impact", ignore_case = TRUE))                 ~ "Impact",
+    str_detect(cohort, regex("doctoral|DTE", ignore_case = TRUE))           ~ "DTE",
+    str_detect(cohort, regex("clinical|trial|CTO", ignore_case = TRUE))     ~ "CTO",
+    TRUE ~ cohort))
+table(data$cohort, useNA = "always")   # should be CTO 32, DTE 10, Impact 22
+```
+
+## 3.2 Reverse coding
+
+Three negatively worded COM-B statements are reverse coded so that "agree" always indicates an enabler.
+
+```{r reverse}
+lv_agree <- c("Strongly disagree", "Disagree", "Neither agree nor disagree",
+              "Agree", "Strongly agree")
+reverse_agree <- function(x) rev(lv_agree)[match(x, lv_agree)]   # NA stays NA
+
+data <- data %>%
+  mutate(social_comp_r        = reverse_agree(social_comp),
+         reflec_conseq_down_r = reverse_agree(reflec_conseq_down),
+         auto_emotions_r      = reverse_agree(auto_emotions))
+
+# Checks: each pair should be mirror images
+table(data$social_comp);        table(data$social_comp_r)
+table(data$reflec_conseq_down); table(data$reflec_conseq_down_r)
+table(data$auto_emotions);      table(data$auto_emotions_r)
+```
+
+## 3.3 Grouped categories for Table 1
+
+Small categories are combined to protect anonymity.
+
+```{r groupings}
+data <- data %>%
+  mutate(
+    # Gender
+    gender_g = case_when(gender == "Woman" ~ "Woman",
+                         gender == "Man"   ~ "Man",
+                         !is.na(gender)    ~ "Another gender identity or prefer not to say"),
+    # Age
+    age_g = case_when(str_detect(age, "^25-34") ~ "25–34",
+                      str_detect(age, "^35-44") ~ "35–44",
+                      str_detect(age, "^45-54") ~ "45–54",
+                      str_detect(age, "^55|^65") ~ "55+",
+                      str_detect(age, "Prefer")  ~ "Prefer not to say"),
+    # Sexual orientation
+    sexual_orient_g = case_when(
+      str_detect(sexual_orient, "Heterosexual") ~ "Heterosexual or straight",
+      str_detect(sexual_orient, "Bisexual|Gay|Lesbian|self-describe") ~ "LGBQ+ (including bisexual, gay or lesbian, and self-described)",
+      !is.na(sexual_orient) ~ "Don't know or prefer not to say"),
+    # Ethnicity (order of conditions matters)
+    ethnicity_g = case_when(
+      str_detect(ethnicity, "Prefer not to say|Any other ethnic group") ~ "Prefer not to say",
+      str_detect(ethnicity, "African|Carribean|Caribbean|Black")         ~ "Black / Black British",
+      str_detect(ethnicity, "Asian|Chinese|Indian|Pakistani|Bangladeshi") ~ "Asian / Asian British (including any other Asian background)",
+      # note: "Northern Irish" is in the British option, so match the Irish option exactly
+      str_detect(ethnicity, "Any other White") | ethnicity == "Irish"   ~ "White – any other White background (including Irish, European, Australian)",
+      str_detect(ethnicity, "^English")                                  ~ "White – English / Welsh / Scottish / Northern Irish / British"),
+    # Parental occupation (Social Mobility Commission groupings)
+    ses_g = case_when(
+      str_detect(ses, "^Modern professional|^Senior, middle")              ~ "Professional",
+      str_detect(ses, "^Clerical|^Small bu")                               ~ "Intermediate",
+      str_detect(ses, "^Technical|^Route|^Routine|^Semi|^Long-term")       ~ "Lower socio-economic",
+      str_detect(ses, "^Other")                                            ~ "Other (e.g., retired, not applicable, don't know)",
+      str_detect(ses, "^Prefer")                                           ~ "Prefer not to say"),
+    # Time in current role (4-5 years merged into 3-5 years)
+    length_g = case_when(
+      length_current == "Less than 12 months" ~ "Less than 12 months",
+      length_current == "1-2 years"           ~ "1–2 years",
+      length_current == "2-3 years"           ~ "2–3 years",
+      length_current %in% c("3-4 years", "4-5 years") ~ "3–5 years",
+      length_current == "More than 5 years"   ~ "More than 5 years"),
+    # Applied for another UCL role?
+    applied = !is.na(last_apply) & !str_detect(last_apply, "haven't applied"),
+    # Grade of role applied for (only those who applied)
+    apply_grade_g = case_when(
+      !applied ~ NA_character_,
+      last_apply_specifiy == "Grade above" ~ "Grade above",
+      last_apply_specifiy == "Same grade"  ~ "Same grade",
+      TRUE                                 ~ "Other or not answered"),
+    # Faculty (faculties with < 5 participants combined)
+    faculty_g = case_when(
+      str_detect(ucl_faculty, "Population Health") ~ "Population Health Sciences",
+      str_detect(ucl_faculty, "Vice-Provost")      ~ "Vice-Provost offices",
+      str_detect(ucl_faculty, "Engineering")       ~ "Engineering Sciences",
+      str_detect(ucl_faculty, "Medical Sciences")  ~ "Medical Sciences",
+      ucl_faculty == "Prefer not to say"           ~ "Prefer not to say",
+      !is.na(ucl_faculty)                          ~ "Other faculties")
+  )
+
+# Checks: every grouped variable should have no unexpected NAs
+sapply(select(data, gender_g, age_g, sexual_orient_g, ethnicity_g, ses_g, length_g, faculty_g),
+       function(x) sum(is.na(x)))
+```
+
+# 4. Descriptive statistics
+
+## 4.1 Table 1: sociodemographic and career-related characteristics (N = 64)
+
+```{r table1}
+freq_table(data$gender_g, c("Woman", "Man", "Another gender identity or prefer not to say"))
+freq_table(data$age_g, c("25–34", "35–44", "45–54", "55+", "Prefer not to say"))
+freq_table(data$sexual_orient_g, c("Heterosexual or straight",
+                                   "LGBQ+ (including bisexual, gay or lesbian, and self-described)",
+                                   "Don't know or prefer not to say"))
+freq_table(data$ethnicity_g, c("Black / Black British",
+                               "Asian / Asian British (including any other Asian background)",
+                               "White – English / Welsh / Scottish / Northern Irish / British",
+                               "White – any other White background (including Irish, European, Australian)",
+                               "Prefer not to say"))
+freq_table(data$disability, c("No", "Yes", "Prefer not to say"))
+freq_table(data$ses_g, c("Professional", "Intermediate", "Lower socio-economic",
+                         "Other (e.g., retired, not applicable, don't know)", "Prefer not to say"))
+
+# Career-related
+freq_table(data$cohort, c("CTO", "DTE", "Impact"))
+freq_table(data$current_grade, c("Grade 6", "Grade 7", "Grade 8", "Grade 9"))
+freq_table(data$length_g, c("Less than 12 months", "1–2 years", "2–3 years", "3–5 years", "More than 5 years"))
+freq_table(data$last_apply, c("Less than 12 months ago", "1-2 years ago", "Over 2 years ago",
+                              "I haven't applied for another role at UCL"))
+freq_table(data$apply_grade_g[data$applied], c("Grade above", "Same grade", "Other or not answered"))  # n = 42
+freq_table(data$faculty_g, c("Population Health Sciences", "Vice-Provost offices", "Engineering Sciences",
+                             "Medical Sciences", "Other faculties", "Prefer not to say"))
+```
+
+## 4.2 Career characteristics by cohort (for the Results text)
+
+Percentages are within each cohort.
+
+```{r career_by_cohort}
+freq_by_cohort(data, "current_grade")
+freq_by_cohort(data, "last_apply")
+freq_by_cohort(data, "length_current")
+freq_by_cohort(data, "faculty_g")
+```
+
+## 4.3 Table 3 and Supplementary Table S3: career development activities
+
+Participants could select more than one activity, so each response is split into separate activities.
+
+```{r activities}
+activities_long <- data %>%
+  select(cohort, activities_develop) %>%
+  mutate(id = row_number(),
+         activity = str_split(activities_develop, ",(?![^()]*\\))")) %>%   # split on commas outside brackets
+  unnest(activity) %>%
+  mutate(activity = str_trim(activity))
+
+# Table 3: overall (N = 64), sorted from most to least common
+table3 <- activities_long %>%
+  count(activity, sort = TRUE) %>%
+  mutate(n_pct = paste0(n, " (", round_up(100 * n / nrow(data)), ")"))
+table3
+
+# Supplementary Table S3: by cohort (% of each cohort)
+cohort_n <- count(data, cohort, name = "cohort_total")
+tableS3 <- activities_long %>%
+  count(activity, cohort) %>%
+  left_join(cohort_n, by = "cohort") %>%
+  mutate(n_pct = paste0(n, " (", round_up(100 * n / cohort_total), ")")) %>%
+  select(activity, cohort, n_pct) %>%
+  pivot_wider(names_from = cohort, values_from = n_pct, values_fill = "0") %>%
+  left_join(select(table3, activity, total = n), by = "activity") %>%
+  arrange(desc(total))
+tableS3
+```
+
+## 4.4 COM-B statements: overall and by cohort
+
+Agree = agree + strongly agree; disagree = disagree + strongly disagree. Reverse-coded items use the `_r` variables.
+
+```{r comb_items}
+comb_items <- tribble(
+  ~item,                     ~panel,        ~label,
+  # Capability
+  "psych_know_expect",       "Capability",  "I know what is expected of me in my role at my current grade",
+  "psych_know_nextgrade",    "Capability",  "I know what is expected of me to reach the next grade",
+  "psych_know_frame",        "Capability",  "I have knowledge on the UCL Career Frameworks",
+  "psych_know_aware",        "Capability",  "I am aware of what career development and progression opportunities are relevant to my role",
+  "psych_know_develop",      "Capability",  "I know what career development and progression opportunities are available at UCL for my role",
+  "psych_skills_require",    "Capability",  "I have the skills required of me to develop in my role",
+  "psych_skills_train",      "Capability",  "I have been offered training and opportunities to help support my development in my role",
+  "psych_mem_identify",      "Capability",  "I know how to identify what is required to develop in my career",
+  "psych_mem_attention",     "Capability",  "I actively pay attention to professional/career development opportunities at UCL",
+  "psych_mem_think",         "Capability",  "My professional/career development is something I actively think about",
+  "psych_behav_action",      "Capability",  "I have an action plan and keep track of my professional/career development",
+  "phys_skills",             "Capability",  "I have the physical ability to develop my career further and any accessibility needs are met",
+  # Opportunity
+  "phys_enviro_resources",   "Opportunity", "I have the physical resources required to develop my career (such as IT systems/files, access to buildings)",
+  "phys_enviro_time",        "Opportunity", "I have sufficient time to engage in activities to support my career development and progression",
+  "phys_opp_fair",           "Opportunity", "The opportunities and processes at UCL about the career progression and development of my role are fair and transparent",
+  "phys_opp_easy",           "Opportunity", "The opportunities and processes at UCL about the career progression and development of my role are easy to access",
+  "phys_beyond",             "Opportunity", "Beyond my current role, I think there are career opportunities for me at UCL",
+  "social_share",            "Opportunity", "My colleagues openly discuss and share resources about professional/career development",
+  "social_manager",          "Opportunity", "My line manager encourages me to progress and develop in my career",
+  "social_comp_r",           "Opportunity", "There is competition and/or tension within my network about career progression and development",
+  "social_network_ucl",      "Opportunity", "I have access to a wider UCL network that enables me to develop my career",
+  "social_network_ext",      "Opportunity", "I have access to a wider network outside of UCL that enables me to develop my career",
+  # Motivation
+  "reflec_identity_expect",  "Motivation",  "It is expected of me to develop professionally whilst in my current role",
+  "reflec_capab_conf",       "Motivation",  "I am confident that I can progress and develop at UCL",
+  "reflec_opt",              "Motivation",  "I am optimistic about my professional development in my current role",
+  "reflec_conseq_benefits",  "Motivation",  "There are benefits to progressing and developing in my career at UCL",
+  "reflec_conseq_down_r",    "Motivation",  "There are downsides to progressing and developing in my career at UCL",
+  "reflec_conseq_outweigh",  "Motivation",  "The benefits of progressing and developing in my career outweigh the downsides at UCL",
+  "reflec_intention_focus",  "Motivation",  "Going forward, I intend to focus on my professional/career development",
+  "reflec_intention_feed",   "Motivation",  "I actively seek feedback from my colleagues and/or line manager to identify how I can develop in my career",
+  "reflect_goals_priority",  "Motivation",  "Career development is a high priority for me",
+  "reflec_goals_self",       "Motivation",  "I have set career goals and objectives for myself",
+  "reflec_goals_other",      "Motivation",  "Others (e.g., my line manager/professional frameworks) have set career progression and development goals for me",
+  "auto_emotions_r",         "Motivation",  "I feel negative emotions about my career development and progression in my role at UCL"
+)
+
+# Summary: n (%) agree, neither, disagree for each statement
+comb_summary <- function(df) {
+  df %>%
+    select(all_of(comb_items$item)) %>%
+    pivot_longer(everything(), names_to = "item", values_to = "response") %>%
+    filter(!is.na(response)) %>%
+    group_by(item) %>%
+    summarise(N = n(),
+              agree    = sum(response %in% lv_agree[4:5]),
+              neither  = sum(response == lv_agree[3]),
+              disagree = sum(response %in% lv_agree[1:2]), .groups = "drop") %>%
+    mutate(across(c(agree, neither, disagree),
+                  ~ paste0(.x, " (", round_up(100 * .x / N), ")"))) %>%
+    left_join(comb_items, by = "item") %>%
+    select(panel, label, N, agree, neither, disagree) %>%
+    arrange(panel, label)
+}
+
+comb_summary(data) %>% print(n = Inf, width = Inf)                    # overall (N = 64)
+for (coh in c("CTO", "DTE", "Impact")) {                                # by cohort
+  cat("\n=====", coh, "=====\n")
+  comb_summary(filter(data, cohort == coh)) %>% print(n = Inf, width = Inf)
+}
+```
+
+## 4.5 Intervention suggestions: Supplementary Table S2
+
+```{r interventions_table}
+lv_help <- c("Strongly unhelpful", "Unhelpful", "Neither helpful or unhelpful",
+             "Helpful", "Strongly helpful")
+help_scores <- setNames(1:5, lv_help)
+
+# Labels include the BCW intervention type
+items_help <- c(
+  int_aware            = "Awareness and guidance on where to access\ncareer development resources (education)",
+  int_career_frame     = "Career framework (education, environmental restructuring)",
+  int_train_external   = "More training opportunities (external) (training)",
+  int_train_internal   = "More training opportunities (internal) (training)",
+  int_secon            = "Programme for external secondments (training, environmental restructuring)",
+  int_network_external = "Networking with staff in similar roles outside UCL (enablement)",
+  int_cop              = "Community of Practice specific to my role (enablement, environmental restructuring)",
+  int_network_ucl      = "Networking with staff in similar roles at UCL (enablement)",
+  int_grade_jobs_desc  = "Grade-specific standardised job descriptions (environmental restructuring)",
+  int_coach            = "Coaching opportunities (enablement)",
+  int_mentor           = "Mentoring opportunities (enablement, environmental restructuring)",
+  int_grade_jobs_title = "Grade-specific standardised job titles (environmental restructuring)",
+  int_case             = "Case studies of different roles (modelling)"
+)
+
+help_long <- data %>%
+  select(cohort, all_of(names(items_help))) %>%
+  pivot_longer(-cohort, names_to = "item", values_to = "response") %>%
+  filter(!is.na(response)) %>%
+  mutate(score = help_scores[response],
+         helpful = response %in% lv_help[4:5])
+
+# Overall: n (%) helpful and M (SD)
+help_overall <- help_long %>%
+  group_by(item) %>%
+  summarise(helpful_n_pct = paste0(sum(helpful), " (", round_up(100 * mean(helpful)), ")"),
+            pct_helpful   = 100 * mean(helpful),
+            M_SD          = sprintf("%.2f (%.2f)", mean(score), sd(score)), .groups = "drop")
+
+# By cohort: % helpful and M (SD)
+help_cohort <- help_long %>%
+  group_by(item, cohort) %>%
+  summarise(value = paste0(round_up(100 * mean(helpful)), "% | ",
+                           sprintf("%.2f (%.2f)", mean(score), sd(score))), .groups = "drop") %>%
+  pivot_wider(names_from = cohort, values_from = value)
+
+tableS2 <- help_overall %>%
+  left_join(help_cohort, by = "item") %>%
+  arrange(desc(pct_helpful)) %>%
+  mutate(item = str_replace_all(items_help[item], "\n", " ")) %>%
+  select(-pct_helpful)
+tableS2 %>% print(n = Inf, width = Inf)
+```
+
+# 5. Plots
+
+## 5.1 Figures 4–6 (COM-B, combined) and Supplementary Figures S1–S9 (by cohort)
+
+```{r comb_plots}
+comb_cols <- setNames(c("#b2182b", "#ef8a62", "#cccccc", "#67a9cf", "#2166ac"), lv_agree)
+
+plot_comb <- function(df, which_panel, wrap = 55) {
+  n_resp <- nrow(df)
+  it <- filter(comb_items, panel == which_panel)
+
+  plot_df <- df %>%
+    select(all_of(it$item)) %>%
+    pivot_longer(everything(), names_to = "item", values_to = "response") %>%
+    filter(!is.na(response)) %>%
+    left_join(it, by = "item") %>%
+    mutate(response = factor(response, levels = lv_agree)) %>%
+    count(item, label, response) %>%
+    complete(nesting(item, label), response, fill = list(n = 0)) %>%
+    arrange(item, response) %>%
+    group_by(item) %>%
+    mutate(pct     = 100 * n / sum(n),
+           offset  = -(sum(pct[response %in% lv_agree[1:2]]) + pct[response == lv_agree[3]] / 2),
+           xmax    = offset + cumsum(pct),
+           xmin    = xmax - pct,
+           barrier = sum(pct[response %in% lv_agree[1:2]])) %>%
+    ungroup() %>%
+    mutate(label_w = str_wrap(label, wrap),
+           label_f = fct_reorder(label_w, -barrier),             # largest barriers at the top
+           y       = length(unique(label_w)) + 1 - as.numeric(label_f))
+
+  ggplot(plot_df) +
+    geom_vline(xintercept = 0, colour = "grey40", linewidth = 0.3) +
+    geom_rect(aes(xmin = xmin, xmax = xmax, ymin = y - 0.36, ymax = y + 0.36, fill = response),
+              colour = "white", linewidth = 0.3) +
+    geom_text(data = filter(plot_df, pct >= 6),
+              aes(x = (xmin + xmax) / 2, y = y, label = round_up(pct),
+                  colour = response %in% c(lv_agree[1], lv_agree[5])), size = 2.6) +
+    scale_colour_manual(values = c(`TRUE` = "white", `FALSE` = "grey15"), guide = "none") +
+    scale_fill_manual(values = comb_cols, breaks = lv_agree, labels = lv_agree, drop = FALSE) +
+    scale_y_continuous(breaks = distinct(plot_df, y, label_w)$y,
+                       labels = distinct(plot_df, y, label_w)$label_w,
+                       expand = expansion(add = 0.6)) +
+    scale_x_continuous(breaks = seq(-100, 100, 25), labels = abs(seq(-100, 100, 25))) +
+    coord_cartesian(xlim = c(-100, 100)) +                       # never drops long bars
+    labs(x = paste0("Percentage of respondents (N = ", n_resp, ")"), y = NULL, fill = NULL) +
+    theme_minimal(base_size = 9) +
+    theme(panel.grid      = element_blank(),
+          axis.text.y     = element_text(size = 8, colour = "grey10", lineheight = 0.95),
+          axis.line.x     = element_line(colour = "grey30"),
+          axis.ticks.x    = element_line(colour = "grey30"),
+          legend.position = "bottom",
+          legend.key.size = unit(0.35, "cm"),
+          legend.text     = element_text(size = 7),
+          plot.margin     = margin(5, 10, 5, 5)) +
+    guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+}
+
+save_tiff <- function(p, file, height_cm) {
+  ggsave(file.path(out_dir, file), p, width = 17, height = height_cm, units = "cm",
+         dpi = 600, compression = "lzw", bg = "white")
+}
+
+panels <- c(Capability = 4, Opportunity = 5, Motivation = 6)   # main-text figure numbers
+
+# Main text: Figures 4-6 (combined)
+for (pn in names(panels)) {
+  h <- 3 + 1.25 * sum(comb_items$panel == pn)
+  save_tiff(plot_comb(data, pn), paste0("Figure", panels[pn], "_COMB_", pn, "_combined.tiff"), h)
+}
+
+# Supplementary: S1-S9 (S1-S3 capability, S4-S6 opportunity, S7-S9 motivation; CTO, DTE, Impact)
+s <- 1
+for (pn in names(panels)) {
+  h <- 3 + 1.25 * sum(comb_items$panel == pn)
+  for (coh in c("CTO", "DTE", "Impact")) {
+    save_tiff(plot_comb(filter(data, cohort == coh), pn),
+              paste0("Supp_FigureS", s, "_COMB_", pn, "_", coh, ".tiff"), h)
+    s <- s + 1
+  }
+}
+
+plot_comb(data, "Opportunity")   # preview one in RStudio
+```
+
+## 5.2 Figure 7 (intervention ratings, combined) and Supplementary Figures S10–S12 (by cohort)
+
+```{r help_plots}
+help_cols   <- setNames(c("#b2182b", "#ef8a62", "#cccccc", "#67a9cf", "#2166ac"), lv_help)
+help_legend <- c("Strongly unhelpful", "Unhelpful", "Neither helpful nor unhelpful",
+                 "Helpful", "Strongly helpful")
+
+plot_helpfulness <- function(df) {
+  n_resp <- nrow(df)
+
+  plot_df <- df %>%
+    select(all_of(names(items_help))) %>%
+    pivot_longer(everything(), names_to = "item", values_to = "response") %>%
+    filter(!is.na(response)) %>%
+    mutate(response = factor(response, levels = lv_help)) %>%
+    count(item, response) %>%
+    complete(item, response, fill = list(n = 0)) %>%
+    arrange(item, response) %>%
+    group_by(item) %>%
+    mutate(pct     = 100 * n / sum(n),
+           offset  = -(sum(pct[response %in% lv_help[1:2]]) + pct[response == lv_help[3]] / 2),
+           xmax    = offset + cumsum(pct),
+           xmin    = xmax - pct,
+           helpful = sum(pct[response %in% lv_help[4:5]])) %>%
+    ungroup() %>%
+    mutate(label = fct_reorder(unname(items_help[item]), helpful),   # ordered by % helpful
+           y     = as.numeric(label))
+
+  ggplot(plot_df) +
+    geom_vline(xintercept = 0, colour = "grey40", linewidth = 0.3) +
+    geom_rect(aes(xmin = xmin, xmax = xmax, ymin = y - 0.36, ymax = y + 0.36, fill = response),
+              colour = "white", linewidth = 0.3) +
+    geom_text(data = filter(plot_df, pct >= 6),
+              aes(x = (xmin + xmax) / 2, y = y, label = round_up(pct),
+                  colour = response %in% c(lv_help[1], lv_help[5])), size = 2.4) +
+    scale_colour_manual(values = c(`TRUE` = "white", `FALSE` = "grey15"), guide = "none") +
+    geom_text(data = distinct(plot_df, y, helpful),
+              aes(x = 103, y = y, label = paste0(round_up(helpful), "%")),
+              hjust = 0, fontface = "bold", colour = "#2166ac", size = 2.5) +
+    annotate("text", x = 103, y = max(plot_df$y) + 0.9, label = "Helpful\n(total)",
+             hjust = 0, vjust = 0, size = 2.3, lineheight = 0.9, colour = "#2166ac") +
+    scale_fill_manual(values = help_cols, breaks = lv_help, labels = help_legend, drop = FALSE) +
+    scale_y_continuous(breaks = seq_along(levels(plot_df$label)), labels = levels(plot_df$label),
+                       expand = expansion(add = c(0.6, 1.8))) +
+    scale_x_continuous(breaks = seq(-40, 100, 20), labels = abs(seq(-40, 100, 20))) +
+    coord_cartesian(xlim = c(-45, 115)) +
+    labs(x = paste0("Percentage of respondents (N = ", n_resp, ")"), y = NULL, fill = NULL) +
+    theme_minimal(base_size = 8) +
+    theme(panel.grid      = element_blank(),
+          axis.text.y     = element_text(size = 7, colour = "grey10", lineheight = 0.9),
+          axis.line.x     = element_line(colour = "grey30"),
+          axis.ticks.x    = element_line(colour = "grey30"),
+          legend.position = "bottom",
+          legend.key.size = unit(0.35, "cm"),
+          legend.text     = element_text(size = 6.5),
+          plot.margin     = margin(5, 10, 5, 5)) +
+    guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+}
+
+# Main text: Figure 7 (combined)
+save_tiff(plot_helpfulness(data), "Figure7_intervention_ratings_combined.tiff", 13)
+
+# Supplementary: S10-S12 (CTO, DTE, Impact)
+s <- 10
+for (coh in c("CTO", "DTE", "Impact")) {
+  save_tiff(plot_helpfulness(filter(data, cohort == coh)),
+            paste0("Supp_FigureS", s, "_intervention_ratings_", coh, ".tiff"), 13)
+  s <- s + 1
+}
+
+plot_helpfulness(data)   # preview in RStudio
+
+# Check all 16 figures were saved
+list.files(out_dir)
+```
